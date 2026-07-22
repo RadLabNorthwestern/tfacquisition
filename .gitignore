@@ -1,0 +1,19 @@
+# Measurement data lives under LOCAL_ROOT, not in this repo
+TF_data/
+*.s2p
+run_log.txt
+acquisition_info.json
+TF_zaxis_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
