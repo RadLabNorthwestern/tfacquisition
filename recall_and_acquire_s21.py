@@ -43,9 +43,23 @@ LOCAL_ROOT = r'C:\Users\TAZ5297\Documents\TFCapture\TF_data'
 # Ports that make up the 2-port Touchstone file (Port 1 = Receive, Port 2 = Transmit).
 S2P_PORTS = (1, 2)
 
+# Frequency (Hz) reported in the per-point |S21| readout and run log. The full
+# sweep is always saved to the .s2p; this only selects which bin to display
+# (nearest measured point). Set to the Larmor frequency of interest.
+REPORT_FREQ = 63.6e6
+
 # True  -> recall + verify the setup, then stop (use this to test the connection).
 # False -> run the full interactive acquisition.
 SETUP_ONLY = False
+
+# SOP folder tree created inside each run folder (naming convention from
+# Fuchang's tf_ops_single_exc.py). Raw .s2p files land in 02_raw; the remaining
+# folders are created ready for downstream processing.
+FORM_FOLDER          = '01_form'
+RAW_FOLDER           = '02_raw'
+RAW_PROCESSED_FOLDER = '03_raw_processed'
+INTERP_EXTRAP_FOLDER = '04_interpolated_extrapolated'
+PLOTS_FOLDER         = '05_plots'
 
 ###############################################################################
 # Small console-input helpers
@@ -158,13 +172,13 @@ if SETUP_ONLY:
 # 3) Device / run identification -> builds the SOP data-tree folder
 
 print('\n=== Device / run identification (builds the save path) ===')
-aimd     = ask('AIMD type')
-lead     = ask('Lead (vendor, model, length)')
-term     = ask('Termination condition')
-ipg      = ask('IPG model')
-field    = ask('Field strength')
+aimd     = ask('AIMD type (e.g. CIED, DBS, SCS, VNS, etc.)')
+lead     = ask('Lead (vendor_model_length (mm))')
+term     = ask('Termination condition (Need to follow the format: Abandoned_Capped, Abandoned_Uncapped, Full_system, etc)')
+ipg      = ask('IPG model (Need to follow the format: IPG_manufacturer_model. If none, write "NOIPG")')
+serial   = ask('Serial number')
 excit    = ask('Excitation / branches (blank if single lead)', default='')
-run_date = ask('Date (YYYYMMDD)', default=date.today().strftime('%Y%m%d'))
+run_date = ask('Date (YYYYMMDD), hit enter for default', default=date.today().strftime('%Y%m%d'))
 run_no   = ask('Run number')
 initials = ask('Operator initials')
 lead_length = ask('Lead / rod length (mm)', cast=float)
@@ -173,7 +187,7 @@ if lead_length <= 0:
     sys.exit('Lead length must be positive.')
 
 # Assemble the relative path segments (skip the excitation level for single leads)
-parts = [safe(aimd), safe(lead), safe(term), safe(ipg), safe(field)]
+parts = [safe(aimd), safe(lead), safe(term), safe(ipg), safe(serial)]
 if excit.strip():
     parts.append(safe(excit))
 parts.append(f'{safe(run_date)}_Run{safe(run_no)}_{safe(initials)}')
@@ -191,6 +205,13 @@ if input('Proceed with these paths? [Enter]=yes, q=quit: ').strip().lower() == '
 
 # Create the tree locally and on the VNA (best-effort; "already exists" is ignored)
 os.makedirs(local_dir, exist_ok=True)
+raw_dir = os.path.join(local_dir, RAW_FOLDER)
+os.makedirs(raw_dir, exist_ok=True)
+os.makedirs(os.path.join(local_dir, FORM_FOLDER), exist_ok=True)
+os.makedirs(os.path.join(local_dir, RAW_PROCESSED_FOLDER), exist_ok=True)
+os.makedirs(os.path.join(local_dir, INTERP_EXTRAP_FOLDER), exist_ok=True)
+os.makedirs(os.path.join(local_dir, PLOTS_FOLDER), exist_ok=True)
+
 _cur = VNA_ROOT.rstrip('\\')
 for _seg in parts:
     _cur = _cur + '\\' + _seg
@@ -226,7 +247,7 @@ lead_step  = step_mag if lead_up else -step_mag
 planned_lead_end = None
 if ruler_end is not None:
     planned_lead_end = lead_start + ((ruler_end - ruler_start) / ruler_step) * lead_step
-metadata_path = os.path.join(local_dir, 'acquisition_info.json')
+metadata_path = os.path.join(raw_dir, 'acquisition_info.json')
 metadata = {
     'schema_version': 1,
     'lead_length_mm': lead_length,
@@ -314,7 +335,7 @@ log(f'AIMD         : {aimd}')
 log(f'Lead         : {lead}')
 log(f'Termination  : {term}')
 log(f'IPG          : {ipg}')
-log(f'Field        : {field}')
+log(f'Serial       : {serial}')
 if excit.strip():
     log(f'Excitation   : {excit}')
 log(f'VNA folder   : {vna_dir}')
@@ -347,7 +368,7 @@ while True:
     lead_pos = lead_start + i * lead_step
     fname = f'{fmt_mm(lead_pos)}MM_{fmt_mm(ruler)}MM.s2p'
     vna_path = vna_dir + '\\' + fname
-    local_path = os.path.join(local_dir, fname)
+    local_path = os.path.join(raw_dir, fname)
 
     past_end = ruler_end is not None and (
         (ruler_step > 0 and ruler > ruler_end + 1e-6) or
@@ -376,8 +397,8 @@ while True:
         continue
 
     mag_db = 20 * np.log10(np.abs(s))
-    pk = int(np.argmax(mag_db))
-    print(f'  saved {fname}   peak |S21| = {mag_db[pk]:.2f} dB @ {freq[pk]/1e6:.4g} MHz'
+    pk = int(np.argmin(np.abs(freq - REPORT_FREQ)))
+    print(f'  saved {fname}   |S21| = {mag_db[pk]:.2f} dB @ {freq[pk]/1e6:.4g} MHz'
           f'{"" if mirrored else "   (VNA only)"}')
 
     log(f'{datetime.now():%Y-%m-%d %H:%M:%S}  {i + 1:>3}  {fmt_mm(lead_pos):>7}  '
@@ -395,7 +416,7 @@ while True:
 ###############################################################################
 # 8) Return-to-home drift check (SOP: |S21| must match baseline within 0.5 dB)
 
-print(f'\n{saved} point(s) saved to {local_dir}')
+print(f'\n{saved} point(s) saved to {raw_dir}')
 
 if baseline_db is not None:
     ans = input('\nReturn-to-home drift check? Move the probe back to the START '
@@ -418,7 +439,7 @@ log(f'Finished     : {datetime.now():%Y-%m-%d %H:%M:%S}  ({saved} points)')
 # end. This remains accurate if the operator quits before/after the planned END.
 if saved:
     acquired_leads = []
-    for name in os.listdir(local_dir):
+    for name in os.listdir(raw_dir):
         m = re.match(r'(-?\d+(?:p\d+)?)MM_', name, re.IGNORECASE)
         if m and name.lower().endswith('.s2p'):
             acquired_leads.append(float(m.group(1).lower().replace('p', '.')))
@@ -430,4 +451,25 @@ if saved:
         with open(metadata_path, 'w', encoding='utf-8') as fh:
             json.dump(metadata, fh, indent=2)
             fh.write('\n')
+
+###############################################################################
+# 9) Auto-launch the z-axis plot for this run
+
+if saved:
+    import subprocess
+    plot_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'plot_tf_zaxis.py')
+    if os.path.isfile(plot_script):
+        print('\nLaunching z-axis plot for this run...')
+        try:
+            # Non-blocking: the plot window opens while this script exits. The
+            # run folder is passed explicitly so no file browser is needed here.
+            subprocess.Popen([sys.executable, plot_script, local_dir])
+        except Exception as ex:  # noqa: BLE001 - plotting is best-effort
+            print(f'  Could not launch plot automatically ({ex}).')
+            print(f'  Run it manually: python "{plot_script}" "{local_dir}"')
+    else:
+        print(f'\nPlot script not found next to this one ({plot_script}); '
+              'skipping auto-plot.')
+
 print('\nDone.')
