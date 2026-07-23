@@ -7,10 +7,11 @@ analyzer (VNA). They implement the *TF Measurement Procedure* SOP:
 | Script | Purpose |
 |--------|---------|
 | [`recall_and_acquire_s21.py`](recall_and_acquire_s21.py) | Interactively acquire one averaged S-parameter sweep per z-axis probe position and save each as a native Touchstone `.s2p` file. |
-| [`plot_tf_zaxis.py`](plot_tf_zaxis.py) | Read the saved `.s2p` files from a run and plot `\|S21\|` (dB) and phase (deg) versus probe position at one or more target frequencies. |
+| [`plot_tf_zaxis.py`](plot_tf_zaxis.py) | Read the saved `.s2p` files from a run, plot `\|S21\|` (dB) and phase (deg) versus probe position at one or more target frequencies, and write per-frequency CSVs and the plot into the run's SOP output folders. |
 
 The acquisition script talks to the instrument over VISA/LAN and drives the sweep;
-the plot script is offline and only reads the mirrored data files.
+the plot script is offline — it reads the mirrored `.s2p` files and writes the
+processed CSVs and overlay plot back into the run's SOP folders.
 
 ---
 
@@ -47,9 +48,12 @@ pip install -r requirements.txt
 6. Enters an **interactive loop**: for each z-axis point it shows the target
    coordinate and filename, waits for you to position the probe and press Enter,
    then triggers one averaged sweep, saves a `.s2p` on the VNA, mirrors that exact
-   file to the local disk, and appends a line to `run_log.txt`.
+   file into the run's `02_raw/` folder, and appends a line to `run_log.txt`. The
+   per-point readout reports `\|S21\|` at `REPORT_FREQ` (not the sweep peak).
 7. Optionally runs a **return-to-home drift check**: re-measure the first point and
    confirm `\|S21\|` still matches the baseline within 0.5 dB.
+8. If any points were saved, **auto-launches `plot_tf_zaxis.py`** on the run folder
+   so the CSVs and overlay plot are generated without a separate step.
 
 ### Configure before running
 Edit the constants at the top of the script:
@@ -62,6 +66,7 @@ Edit the constants at the top of the script:
 | `VNA_ROOT` | Root folder for saves on the analyzer, e.g. `D:\TF_measurements_workflow`. |
 | `LOCAL_ROOT` | Root folder for the local mirror on this PC. Must match the plot script's `LOCAL_ROOT`. |
 | `S2P_PORTS` | Ports in the Touchstone file — `(1, 2)`; Port 1 = Receive, Port 2 = Transmit. |
+| `REPORT_FREQ` | Frequency (Hz) shown in the per-point `\|S21\|` readout and `run_log.txt`, e.g. `63.6e6`. Display only — the full sweep is always saved. |
 | `SETUP_ONLY` | `True` = recall + verify the setup, then stop (use to test the connection). `False` = full acquisition. |
 
 Sweep range, real/imaginary format, −5 dBm power, 500 Hz IF BW and 5 averages come
@@ -82,33 +87,54 @@ Then answer the prompts:
 
 ### Filenames & folder layout
 Files are auto-named `\[lead]MM_\[ruler]MM.s2p`, e.g. `40MM_930MM.s2p`. Whole numbers
-are written plain; decimals use `p` for the dot (e.g. `152p5MM`). The folder tree is:
+are written plain; decimals use `p` for the dot (e.g. `152p5MM`). Each run folder
+uses the SOP subfolder tree (naming convention from Fuchang's `tf_ops_single_exc.py`):
 
 ```
 LOCAL_ROOT/
-  <AIMD>/<Lead>/<Termination>/<IPG>/<Field>/[<Excitation>/]<YYYYMMDD_RunN_Initials>/
-      0MM_890MM.s2p
-      5MM_895MM.s2p
-      ...
-      acquisition_info.json   # machine-readable geometry (see §4)
-      run_log.txt             # human-readable audit log of the run
+  <AIMD>/<Lead>/<Termination>/<IPG>/<Serial>/[<Excitation>/]<YYYYMMDD_RunN_Initials>/
+      run_log.txt                     # human-readable audit log of the run
+      01_form/                        # reserved for run paperwork
+      02_raw/                         # native Touchstone sweeps + geometry
+          0MM_890MM.s2p
+          5MM_895MM.s2p
+          ...
+          acquisition_info.json       # machine-readable geometry (see §4)
+      03_raw_processed/               # measured S21 vs distance, per freq (CSV; from the plotter)
+      04_interpolated_extrapolated/   # full-length TF curve, per freq (CSV; from the plotter)
+      05_plots/                       # overlay PNG (from the plotter)
 ```
+
+`02_raw/` is filled by the acquisition script; `03`–`05` are filled when
+`plot_tf_zaxis.py` runs (automatically at the end of a run, or manually later).
 
 ---
 
 ## 3. Plotting — `plot_tf_zaxis.py`
 
 ### What it does
-Reads every `\[lead]MM_\[ruler]MM.s2p` file in a run folder, extracts S21 at each
-`TARGET_FREQS` entry, and plots two stacked panels vs probe position:
+Reads every `\[lead]MM_\[ruler]MM.s2p` file in a run's `02_raw/` folder, extracts S21
+at each `TARGET_FREQS` entry, and plots two stacked panels vs probe position:
 **`\|S21\|` (dB)** on top and **phase (deg)** below, with each target frequency
 overlaid as its own curve. Use it for the SOP *Data Continuity & Physical Integrity
 Check* — look for sharp jumps or discontinuities that indicate the lead touched the
-receive ring. The figure is saved as a PNG in the run folder and also shown on screen.
+receive ring.
+
+It writes into the run's SOP output folders (one CSV **per target frequency**, plus a
+single overlay figure):
+- `03_raw_processed/` — `<run>__<freq>__original.csv`: the measured S21-vs-distance
+  points actually used (source file, position, real/imag, `\|S21\|` dB, phase deg).
+- `04_interpolated_extrapolated/` — `<run>__<freq>__interp_extrap.csv`: the
+  full-length curve (measured points plus the extrapolated ends), with a `region`
+  column tagging each row `measured` or `extrapolated`. Matches what the plot draws.
+- `05_plots/` — `TF_zaxis_<freqs>MHz.png`: the overlay figure, also shown on screen.
+
+You can point it at the **run root**, its **`02_raw/`** folder, or a **flat folder** of
+`.s2p` files — it resolves the layout automatically and writes outputs next to `02_raw/`.
 
 If `acquisition_info.json` is present (lead x-axis), the plotter linearly
 **extrapolates** dashed segments from the measured range out to the full physical
-lead length so the curve spans the whole lead.
+lead length so the curve — and the `04_...` CSV — spans the whole lead.
 
 ### Configure
 | Constant | Meaning |
@@ -119,11 +145,13 @@ lead length so the curve spans the whole lead.
 | `X_AXIS` | `'lead'` or `'ruler'` — which coordinate is the x-axis. `'lead'` requires `acquisition_info.json`. |
 
 ### Run it
+Usually launched automatically at the end of an acquisition. To run it standalone:
 ```sh
 python plot_tf_zaxis.py                      # auto-pick latest run, or use RUN_DIR
-python plot_tf_zaxis.py "C:\path\to\run_dir" # explicit folder (overrides config)
+python plot_tf_zaxis.py "C:\path\to\run_dir" # explicit run root or 02_raw folder
 ```
-Output: `TF_zaxis_<freqs>MHz.png` written into the run folder.
+Output: per-frequency CSVs in `03_raw_processed/` and `04_interpolated_extrapolated/`,
+plus `05_plots/TF_zaxis_<freqs>MHz.png`.
 
 ---
 
@@ -166,8 +194,8 @@ phase_deg = np.degrees(np.angle(s21))          # phase in degrees
 ```
 
 ### `acquisition_info.json`
-Machine-readable geometry for a run, written by the acquisition script and consumed
-by the plotter. Key fields:
+Machine-readable geometry for a run, written into `02_raw/` by the acquisition script
+and consumed by the plotter. Key fields:
 
 | Field | Meaning |
 |-------|---------|
@@ -180,11 +208,22 @@ by the plotter. Key fields:
 | `start_unmeasured_mm`, `end_unmeasured_mm` | Distances from each physical lead end that were not measured. |
 | `acquired_lead_min_mm`, `acquired_lead_max_mm` | Actual measured span (added after the run finishes). |
 
+### Processed CSV outputs (`03_raw_processed/`, `04_interpolated_extrapolated/`)
+Written by `plot_tf_zaxis.py`, one file per target frequency (label like `63p6MHz`):
+
+- **`03_raw_processed/<run>__<freq>__original.csv`** — the measured points used for
+  that frequency. Columns: `source_file`, `<lead|ruler>_position_mm`, `S21_real`,
+  `S21_imag`, `S21_mag_dB`, `S21_phase_deg`.
+- **`04_interpolated_extrapolated/<run>__<freq>__interp_extrap.csv`** — the
+  full-length curve. Columns: `<lead|ruler>_position_mm`, `region`
+  (`measured`/`extrapolated`), `S21_mag_dB`, `S21_phase_deg`.
+
 ### `run_log.txt`
-Human-readable audit log: a header block (operator, device fields, stimulus,
-coordinate map, geometry) followed by one line per saved point (timestamp, point
-index, lead & ruler positions, filename, peak `\|S21\|` in dB and its frequency, and
-whether the local mirror succeeded), then the return-to-home result and a finish line.
+Human-readable audit log at the run-folder root: a header block (operator, device
+fields including serial number, stimulus, coordinate map, geometry) followed by one
+line per saved point (timestamp, point index, lead & ruler positions, filename,
+`\|S21\|` in dB at `REPORT_FREQ` and that frequency, and whether the local mirror
+succeeded), then the return-to-home result and a finish line.
 
 ---
 
@@ -196,7 +235,9 @@ whether the local mirror succeeded), then the return-to-home result and a finish
 - **`LOCAL_ROOT` must match** between the two scripts, or the plotter won't find the
   data the acquisition script mirrored.
 - **Path length:** the nested SOP folder plus filename can approach the Windows
-  260-char limit; the script warns above ~200 chars. Prefer short field values.
+  260-char limit — and the plotter's `04_interpolated_extrapolated/<run>__<freq>__…csv`
+  paths are the longest of all. The acquisition script warns above ~200 chars. Prefer
+  short field values, keep `LOCAL_ROOT` shallow, or enable Windows long-path support.
 - This repo contains only the two scripts and their docs — the actual measurement
   data (`.s2p`, logs, PNGs) is written under `LOCAL_ROOT` elsewhere and is
   intentionally **not** tracked here (see `.gitignore`).
