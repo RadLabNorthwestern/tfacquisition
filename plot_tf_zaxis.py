@@ -32,8 +32,9 @@ import matplotlib.pyplot as plt
 # recent acquisition under LOCAL_ROOT. A command-line arg overrides both.
 RUN_DIR = r''
 
-# Root the acquisition script mirrors into (must match recall_and_acquire_s21.py).
-LOCAL_ROOT = r'C:\Users\TAZ5297\Documents\TFCapture\TF_data'
+# Root the acquisition script mirrors into (must match recall_and_acquire_s21.py):
+# a TF_data folder next to that script, wherever the repo happens to be checked out.
+LOCAL_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TF_data')
 
 # Frequencies (Hz) to read S21 at. Each is plotted as its own overlaid curve.
 TARGET_FREQS = [63.6e6, 123.2e6]

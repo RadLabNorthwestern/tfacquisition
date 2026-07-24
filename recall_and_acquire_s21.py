@@ -36,9 +36,10 @@ state_file = r'D:\TF_measurements_workflow\Frequencies_lock_pm1MHz_0p1MHz.sta'
 # script with RECALL_STATE = False so the live 2-port cal is preserved.
 RECALL_STATE = False
 
-# Roots of the SOP data tree. VNA_ROOT is on the analyzer; LOCAL_ROOT is on this PC.
+# Roots of the SOP data tree. VNA_ROOT is on the analyzer; LOCAL_ROOT is on this PC,
+# next to this script (works no matter where the repo is checked out / who runs it).
 VNA_ROOT   = r'D:\TF_measurements_workflow'
-LOCAL_ROOT = r'C:\Users\TAZ5297\Documents\TFCapture\TF_data'
+LOCAL_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TF_data')
 
 # Ports that make up the 2-port Touchstone file (Port 1 = Receive, Port 2 = Transmit).
 S2P_PORTS = (1, 2)
