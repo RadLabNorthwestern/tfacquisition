@@ -173,7 +173,7 @@ if SETUP_ONLY:
 
 print('\n=== Device / run identification (builds the save path) ===')
 aimd     = ask('AIMD type (e.g. CIED, DBS, SCS, VNS, etc.)')
-lead     = ask('Lead (vendor_model_length (mm))')
+lead     = ask('Lead Name')
 term     = ask('Termination condition (Need to follow the format: Abandoned_Capped, Abandoned_Uncapped, Full_system, etc)')
 ipg      = ask('IPG model (Need to follow the format: IPG_manufacturer_model. If none, write "NOIPG")')
 serial   = ask('Serial number')
