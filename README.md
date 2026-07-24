@@ -8,6 +8,8 @@ analyzer (VNA). They implement the *TF Measurement Procedure* SOP:
 |--------|---------|
 | [`recall_and_acquire_s21.py`](recall_and_acquire_s21.py) | Interactively acquire one averaged S-parameter sweep per z-axis probe position and save each as a native Touchstone `.s2p` file. |
 | [`plot_tf_zaxis.py`](plot_tf_zaxis.py) | Read the saved `.s2p` files from a run, plot `\|S21\|` (dB) and phase (deg) versus probe position at one or more target frequencies, and write per-frequency CSVs and the plot into the run's SOP output folders. |
+| [`segment_setup/show_segments.py`](segment_setup/show_segments.py) | Read-only. Print the live ENA **segment sweep** table (which frequency points are measured). |
+| [`segment_setup/set_fast_segments.py`](segment_setup/set_fast_segments.py) | Rebuild the segment table to just the narrow ranges of interest for faster acquisition, and overwrite the loaded state `.sta` in place. |
 
 The acquisition script talks to the instrument over VISA/LAN and drives the sweep;
 the plot script is offline — it reads the mirrored `.s2p` files and writes the
@@ -32,7 +34,63 @@ pip install -r requirements.txt
 
 ---
 
-## 2. Acquisition — `recall_and_acquire_s21.py`
+## 2. Segment setup — `segment_setup/`
+
+Before calibrating, the ENA's **segment sweep** defines exactly which frequency
+points are measured. These two helpers inspect and rebuild that grid so
+acquisition only spends time on the frequencies of interest — the earlier
+`±1 MHz at 0.1 MHz` grid measured ~147 points, many of them frequencies we don't
+care about.
+
+| Script | Purpose |
+|--------|---------|
+| [`segment_setup/show_segments.py`](segment_setup/show_segments.py) | **Read-only.** Print the live segment table (start/stop, center, points, per-segment IF BW / power) and the raw segment string. Changes nothing. Run this first. |
+| [`segment_setup/set_fast_segments.py`](segment_setup/set_fast_segments.py) | Rebuild the segment table **from scratch** to a small set of bands plus single-point top frequencies, then overwrite the loaded state `.sta` in place. |
+
+`set_fast_segments.py` replaces the whole table with a few **bands** (swept at
+`STEP_HZ` spacing) plus **single-point** top frequencies. With the default
+config that is 63 points instead of ~147:
+
+| Segment | Points |
+|---------|--------|
+| 23.0–24.0 MHz | 11 |
+| 50.0–51.6 MHz | 17 |
+| 63.0–64.0 MHz | 11 |
+| 123.0–124.0 MHz | 11 |
+| 127.0–128.0 MHz | 11 |
+| 297 MHz (single point) | 1 |
+| 447 MHz (single point) | 1 |
+| **Total** | **63** |
+
+Edit the constants at the top to change the grid:
+
+| Constant | Meaning |
+|----------|---------|
+| `BANDS_MHZ` | List of `(start, stop)` ranges in **MHz** to sweep. |
+| `STEP_HZ` | Point spacing inside each band, e.g. `0.1e6` (0.1 MHz). The main speed lever. |
+| `SINGLE_POINT_FREQS_HZ` | Top frequencies (**Hz**) kept as one point each. |
+| `STATE_FILE` | The `.sta` on the VNA to **overwrite in place** — the same file `recall_and_acquire_s21.py` recalls. |
+
+The script reads the live table only to inherit the segment-table format and
+reuse the global IF BW / power (SOP 500 Hz / −5 dBm), shows a before/after
+preview, asks for confirmation, writes the new grid, verifies every single point
+and band edge is hit, then saves the grid back over `STATE_FILE`.
+
+> **Changing the stimulus invalidates the calibration.** After running
+> `set_fast_segments.py`, **re-run the 2-port cal** on the new grid before
+> acquiring. `recall_and_acquire_s21.py` needs no change — its `state_file`
+> already points at `STATE_FILE`, and the new stimulus is already live, so there
+> is nothing new to recall.
+
+### Run it
+```sh
+python segment_setup/show_segments.py       # inspect the current grid
+python segment_setup/set_fast_segments.py   # rebuild + overwrite the state file
+```
+
+---
+
+## 3. Acquisition — `recall_and_acquire_s21.py`
 
 ### What it does
 1. Connects to the VNA and prints `*IDN?`.
@@ -99,7 +157,7 @@ LOCAL_ROOT/
           0MM_890MM.s2p
           5MM_895MM.s2p
           ...
-          acquisition_info.json       # machine-readable geometry (see §4)
+          acquisition_info.json       # machine-readable geometry (see §5)
       03_raw_processed/               # measured S21 vs distance, per freq (CSV; from the plotter)
       04_interpolated_extrapolated/   # full-length TF curve, per freq (CSV; from the plotter)
       05_plots/                       # overlay PNG (from the plotter)
@@ -110,7 +168,7 @@ LOCAL_ROOT/
 
 ---
 
-## 3. Plotting — `plot_tf_zaxis.py`
+## 4. Plotting — `plot_tf_zaxis.py`
 
 ### What it does
 Reads every `\[lead]MM_\[ruler]MM.s2p` file in a run's `02_raw/` folder, extracts S21
@@ -155,7 +213,7 @@ plus `05_plots/TF_zaxis_<freqs>MHz.png`.
 
 ---
 
-## 4. Reading the data
+## 5. Reading the data
 
 ### `.s2p` Touchstone files
 Plain text, one measured frequency per row. Lines starting with `!` are comments;
@@ -227,7 +285,7 @@ succeeded), then the return-to-home result and a finish line.
 
 ---
 
-## 5. Notes & gotchas
+## 6. Notes & gotchas
 
 - **Calibration:** a valid 2-port cal must be ON, or `.s2p` saves fail (E5063A error
   57). The acquisition script warns if correction is OFF. Recalling a `.sta` state
